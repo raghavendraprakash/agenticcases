@@ -1,0 +1,312 @@
+{
+  "agent": {
+    "name": "flight-cargo-assessment-agent",
+    "description": "AI-powered flight cargo position assessment and optimization system for Boeing 777F aircraft",
+    "foundationModel": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "instruction": "You are an AI-powered Flight Cargo Position Assessment Agent specialized in optimizing cargo placement on Boeing 777F aircraft. Your core capabilities include position management, weight & balance calculations, constraint validation, alert generation, and visualization data generation. Always prioritize safety by ensuring aircraft weight and balance limits are never exceeded, structural load limits are respected, cargo constraints are enforced, and position capacity limits are never violated. Provide structured JSON responses with assessment results, recommendations, capacity utilization, weight balance impact, alerts, and visualization data.",
+    "idleSessionTTLInSeconds": 1800,
+    "tags": {
+      "Project": "FlightCargoAssessment",
+      "Environment": "Production",
+      "ManagedBy": "BedrockAgentCore",
+      "Version": "1.0"
+    }
+  },
+  "actionGroups": [
+    {
+      "name": "cargo-assessment",
+      "description": "Core cargo assessment and position recommendation functions",
+      "actions": [
+        {
+          "name": "assess-cargo",
+          "description": "Analyze cargo specifications and recommend optimal positions with weight balance validation",
+          "parameters": {
+            "cargo_id": {
+              "type": "string",
+              "description": "Unique identifier for the cargo item",
+              "required": true
+            },
+            "dimensions": {
+              "type": "object",
+              "description": "Cargo dimensions in meters",
+              "properties": {
+                "length": {"type": "number", "minimum": 0.1, "maximum": 15.0},
+                "width": {"type": "number", "minimum": 0.1, "maximum": 5.0},
+                "height": {"type": "number", "minimum": 0.1, "maximum": 3.5}
+              },
+              "required": true
+            },
+            "weight": {
+              "type": "number",
+              "description": "Cargo weight in kilograms",
+              "minimum": 1,
+              "maximum": 10000,
+              "required": true
+            },
+            "stackable": {
+              "type": "boolean",
+              "description": "Whether cargo can have other items stacked on top",
+              "default": true
+            },
+            "tiltable": {
+              "type": "boolean", 
+              "description": "Whether cargo can be tilted during handling",
+              "default": true
+            },
+            "fragile": {
+              "type": "boolean",
+              "description": "Whether cargo requires special fragile handling",
+              "default": false
+            },
+            "cargo_type": {
+              "type": "string",
+              "description": "Type of cargo",
+              "enum": ["electronics", "machinery", "textiles", "automotive_parts", "pharmaceuticals", "general"],
+              "default": "general"
+            },
+            "preferred_deck": {
+              "type": "string",
+              "description": "Preferred deck for placement",
+              "enum": ["lower_deck", "main_deck"],
+              "required": false
+            },
+            "priority": {
+              "type": "string",
+              "description": "Cargo priority level",
+              "enum": ["low", "normal", "high", "urgent"],
+              "default": "normal"
+            }
+          },
+          "response": {
+            "type": "object",
+            "properties": {
+              "assessment_successful": {"type": "boolean"},
+              "cargo_id": {"type": "string"},
+              "recommended_positions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "position_id": {"type": "string"},
+                    "deck_type": {"type": "string"},
+                    "fit_score": {"type": "number"},
+                    "reasoning": {"type": "string"},
+                    "constraints_satisfied": {"type": "boolean"},
+                    "coordinates": {
+                      "type": "object",
+                      "properties": {
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                        "z": {"type": "number"}
+                      }
+                    }
+                  }
+                }
+              },
+              "capacity_utilization": {
+                "type": "object",
+                "properties": {
+                  "total_utilization": {"type": "number"},
+                  "lower_deck_utilization": {"type": "number"},
+                  "main_deck_utilization": {"type": "number"},
+                  "available_positions": {"type": "integer"},
+                  "total_positions": {"type": "integer"}
+                }
+              },
+              "weight_balance_impact": {
+                "type": "object",
+                "properties": {
+                  "current_cg": {
+                    "type": "object",
+                    "properties": {
+                      "x": {"type": "number"},
+                      "y": {"type": "number"},
+                      "z": {"type": "number"}
+                    }
+                  },
+                  "new_cg": {
+                    "type": "object",
+                    "properties": {
+                      "x": {"type": "number"},
+                      "y": {"type": "number"},
+                      "z": {"type": "number"}
+                    }
+                  },
+                  "within_limits": {"type": "boolean"}
+                }
+              },
+              "alerts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "severity": {"type": "string"},
+                    "message": {"type": "string"},
+                    "alert_type": {"type": "string"},
+                    "suggested_actions": {
+                      "type": "array",
+                      "items": {"type": "string"}
+                    }
+                  }
+                }
+              },
+              "error_message": {"type": "string"}
+            }
+          }
+        },
+        {
+          "name": "get-capacity",
+          "description": "Retrieve current aircraft capacity utilization and availability",
+          "parameters": {},
+          "response": {
+            "type": "object",
+            "properties": {
+              "total_utilization": {"type": "number", "description": "Overall capacity utilization percentage"},
+              "lower_deck_utilization": {"type": "number", "description": "Lower deck utilization percentage"},
+              "main_deck_utilization": {"type": "number", "description": "Main deck utilization percentage"},
+              "available_positions": {"type": "integer", "description": "Number of available positions"},
+              "total_positions": {"type": "integer", "description": "Total number of positions"},
+              "weight_utilization": {"type": "number", "description": "Weight capacity utilization percentage"}
+            }
+          }
+        },
+        {
+          "name": "get-system-status",
+          "description": "Get current system status and configuration information",
+          "parameters": {},
+          "response": {
+            "type": "object",
+            "properties": {
+              "system_status": {"type": "string"},
+              "agent_mode": {"type": "string"},
+              "region": {"type": "string"},
+              "agents_available": {"type": "boolean"},
+              "timestamp": {"type": "integer"},
+              "agent_configuration": {"type": "object"},
+              "bedrock_enabled": {"type": "boolean"}
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "knowledgeBases": [
+    {
+      "name": "aircraft-specifications",
+      "description": "Boeing 777F aircraft specifications and cargo handling procedures",
+      "documents": [
+        {
+          "title": "Boeing 777F Cargo Configuration",
+          "content": "The Boeing 777F is a dedicated freighter aircraft with the following specifications: Total cargo positions: 56 (24 lower deck + 32 main deck), Maximum payload: 65,000 kg, Maximum total weight: 110,000 kg, Lower deck height limit: 2.4m, Main deck height limit: 3.2m, CG limits: 16.5m to 26.8m from datum, Lower deck positions: LD-01-01 through LD-12-02, Main deck positions: MD-01-01 through MD-16-02"
+        },
+        {
+          "title": "Weight and Balance Procedures",
+          "content": "Aircraft weight and balance must be maintained within certified limits. Forward CG limit: 16.5m, Aft CG limit: 26.8m, Empty weight: 45,000 kg, Empty CG: 20.5m. All cargo placements must be validated for CG impact and structural load distribution. Weight distribution should be balanced between decks and fore/aft sections."
+        },
+        {
+          "title": "Cargo Handling Constraints",
+          "content": "Cargo types have specific handling requirements: Electronics - fragile, prefer lower deck, avoid stacking; Machinery - heavy, require structural support; Textiles - stackable, space efficient; Automotive parts - various sizes, moderate weight; Pharmaceuticals - temperature sensitive, secure storage; General cargo - standard handling procedures."
+        }
+      ]
+    }
+  ],
+  "deployment": {
+    "environment": "production",
+    "region": "us-east-1",
+    "lambda": {
+      "runtime": "python3.11",
+      "timeout": 300,
+      "memory": 512,
+      "environment_variables": {
+        "CARGO_AGENT_MODE": "ai_powered",
+        "AWS_REGION": "us-east-1",
+        "LOG_LEVEL": "INFO"
+      }
+    },
+    "iam": {
+      "agent_role_policies": [
+        "bedrock:InvokeModel",
+        "bedrock:GetFoundationModel",
+        "bedrock:ListFoundationModels",
+        "s3:GetObject",
+        "s3:PutObject",
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "lambda_role_policies": [
+        "AWSLambdaBasicExecutionRole",
+        "bedrock:InvokeModel"
+      ]
+    },
+    "monitoring": {
+      "cloudwatch_logs": true,
+      "metrics": true,
+      "alarms": [
+        {
+          "name": "HighErrorRate",
+          "metric": "Errors",
+          "threshold": 5,
+          "period": 300
+        },
+        {
+          "name": "HighLatency",
+          "metric": "Duration",
+          "threshold": 30000,
+          "period": 300
+        }
+      ]
+    }
+  },
+  "testing": {
+    "test_cases": [
+      {
+        "name": "standard_cargo_assessment",
+        "input": {
+          "cargo_id": "TEST_001",
+          "dimensions": {"length": 2.0, "width": 1.5, "height": 1.2},
+          "weight": 800,
+          "stackable": true,
+          "tiltable": false,
+          "fragile": false,
+          "cargo_type": "electronics",
+          "preferred_deck": "lower_deck",
+          "priority": "high"
+        },
+        "expected_output": {
+          "assessment_successful": true,
+          "recommended_positions": "non_empty_array",
+          "capacity_utilization": "object",
+          "weight_balance_impact": "object"
+        }
+      },
+      {
+        "name": "oversized_cargo_rejection",
+        "input": {
+          "cargo_id": "TEST_002",
+          "dimensions": {"length": 20.0, "width": 6.0, "height": 4.0},
+          "weight": 15000,
+          "stackable": false,
+          "tiltable": false,
+          "fragile": true,
+          "cargo_type": "machinery",
+          "priority": "urgent"
+        },
+        "expected_output": {
+          "assessment_successful": false,
+          "error_message": "contains_size_violation",
+          "recommended_positions": "empty_array"
+        }
+      },
+      {
+        "name": "capacity_status_check",
+        "action": "get-capacity",
+        "expected_output": {
+          "total_utilization": "number",
+          "available_positions": "positive_integer",
+          "total_positions": 56
+        }
+      }
+    ]
+  }
+}

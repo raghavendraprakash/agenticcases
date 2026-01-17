@@ -1,0 +1,417 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Flight Cargo Assessment System - Bedrock AgentCore Deployment'
+
+Parameters:
+  AgentName:
+    Type: String
+    Default: flight-cargo-assessment-agent
+    Description: Name for the Bedrock agent
+  
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [development, staging, production]
+    Description: Deployment environment
+  
+  FoundationModel:
+    Type: String
+    Default: anthropic.claude-3-5-sonnet-20241022-v2:0
+    Description: Foundation model for the agent
+  
+  LambdaRuntime:
+    Type: String
+    Default: python3.11
+    Description: Lambda runtime version
+
+Resources:
+  # S3 Bucket for agent artifacts
+  AgentArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'bedrock-agent-${AgentName}-${AWS::Region}-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: FlightCargoAssessment
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: AgentArtifacts
+
+  # IAM Role for Bedrock Agent
+  BedrockAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AgentName}-bedrock-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonBedrockAgentServiceRolePolicy
+      Policies:
+        - PolicyName: BedrockAgentPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:GetFoundationModel
+                  - bedrock:ListFoundationModels
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${AgentArtifactsBucket}/*'
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt LambdaExecutorFunction.Arn
+      Tags:
+        - Key: Project
+          Value: FlightCargoAssessment
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for Lambda Executor
+  LambdaExecutorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AgentName}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaExecutorPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:GetFoundationModel
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub '${AgentArtifactsBucket}/*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: FlightCargoAssessment
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda Layer for Dependencies
+  DependenciesLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub '${AgentName}-dependencies'
+      Description: Python dependencies for Flight Cargo Assessment
+      Content:
+        S3Bucket: !Ref AgentArtifactsBucket
+        S3Key: layers/dependencies.zip
+      CompatibleRuntimes:
+        - !Ref LambdaRuntime
+      CompatibleArchitectures:
+        - x86_64
+
+  # Lambda Function for Agent Execution
+  LambdaExecutorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AgentName}-executor'
+      Description: Executor function for Flight Cargo Assessment Bedrock Agent
+      Runtime: !Ref LambdaRuntime
+      Handler: lambda_handler.handler
+      Role: !GetAtt LambdaExecutorRole.Arn
+      Code:
+        S3Bucket: !Ref AgentArtifactsBucket
+        S3Key: code/agent_code.zip
+      Layers:
+        - !Ref DependenciesLayer
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          CARGO_AGENT_MODE: ai_powered
+          AWS_REGION: !Ref AWS::Region
+          LOG_LEVEL: INFO
+          S3_BUCKET: !Ref AgentArtifactsBucket
+      DeadLetterQueue:
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+      Tags:
+        - Key: Project
+          Value: FlightCargoAssessment
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: AgentExecutor
+
+  # Lambda Permission for Bedrock Agent
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaExecutorFunction
+      Action: lambda:InvokeFunction
+      Principal: bedrock.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  # Dead Letter Queue for Lambda
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AgentName}-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Project
+          Value: FlightCargoAssessment
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudWatch Log Group for Lambda
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AgentName}-executor'
+      RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: FlightCargoAssessment
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudWatch Alarms
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AgentName}-lambda-errors'
+      AlarmDescription: High error rate for Lambda executor
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LambdaExecutorFunction
+      TreatMissingData: notBreaching
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AgentName}-lambda-duration'
+      AlarmDescription: High duration for Lambda executor
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 30000  # 30 seconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LambdaExecutorFunction
+      TreatMissingData: notBreaching
+
+  # SNS Topic for Alerts
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AgentName}-alerts'
+      DisplayName: Flight Cargo Assessment Alerts
+      Tags:
+        - Key: Project
+          Value: FlightCargoAssessment
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Custom Resource for Bedrock Agent Creation
+  BedrockAgentCustomResource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt BedrockAgentCreatorFunction.Arn
+      AgentName: !Ref AgentName
+      AgentDescription: AI-powered flight cargo position assessment and optimization system
+      FoundationModel: !Ref FoundationModel
+      AgentRoleArn: !GetAtt BedrockAgentRole.Arn
+      LambdaFunctionArn: !GetAtt LambdaExecutorFunction.Arn
+      Environment: !Ref Environment
+
+  # Lambda Function for Custom Resource (Bedrock Agent Creation)
+  BedrockAgentCreatorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AgentName}-creator'
+      Description: Custom resource to create Bedrock Agent
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt BedrockAgentCreatorRole.Arn
+      Timeout: 900
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def handler(event, context):
+              try:
+                  bedrock_agent = boto3.client('bedrock-agent')
+                  
+                  if event['RequestType'] == 'Create':
+                      # Create Bedrock Agent
+                      response = bedrock_agent.create_agent(
+                          agentName=event['ResourceProperties']['AgentName'],
+                          description=event['ResourceProperties']['AgentDescription'],
+                          foundationModel=event['ResourceProperties']['FoundationModel'],
+                          agentResourceRoleArn=event['ResourceProperties']['AgentRoleArn'],
+                          instruction="""You are an AI-powered Flight Cargo Position Assessment Agent specialized in optimizing cargo placement on Boeing 777F aircraft. Your core capabilities include position management, weight & balance calculations, constraint validation, alert generation, and visualization data generation. Always prioritize safety by ensuring aircraft weight and balance limits are never exceeded.""",
+                          idleSessionTTLInSeconds=1800,
+                          tags={
+                              'Project': 'FlightCargoAssessment',
+                              'Environment': event['ResourceProperties']['Environment']
+                          }
+                      )
+                      
+                      agent_id = response['agent']['agentId']
+                      
+                      # Create Action Group
+                      bedrock_agent.create_agent_action_group(
+                          agentId=agent_id,
+                          agentVersion='DRAFT',
+                          actionGroupName='cargo-assessment',
+                          description='Core cargo assessment functions',
+                          actionGroupExecutor={
+                              'lambda': {
+                                  'lambdaArn': event['ResourceProperties']['LambdaFunctionArn']
+                              }
+                          }
+                      )
+                      
+                      # Prepare Agent
+                      bedrock_agent.prepare_agent(agentId=agent_id)
+                      
+                      # Create Alias
+                      alias_response = bedrock_agent.create_agent_alias(
+                          agentId=agent_id,
+                          aliasName='production',
+                          description='Production alias'
+                      )
+                      
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                          'AgentId': agent_id,
+                          'AgentAliasId': alias_response['agentAlias']['agentAliasId']
+                      })
+                      
+                  elif event['RequestType'] == 'Delete':
+                      # Delete agent if needed
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      
+              except Exception as e:
+                  logger.error(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+  # IAM Role for Bedrock Agent Creator
+  BedrockAgentCreatorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: BedrockAgentCreatorPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock-agent:CreateAgent
+                  - bedrock-agent:DeleteAgent
+                  - bedrock-agent:GetAgent
+                  - bedrock-agent:UpdateAgent
+                  - bedrock-agent:CreateAgentActionGroup
+                  - bedrock-agent:DeleteAgentActionGroup
+                  - bedrock-agent:CreateAgentAlias
+                  - bedrock-agent:DeleteAgentAlias
+                  - bedrock-agent:PrepareAgent
+                  - iam:PassRole
+                Resource: '*'
+
+Outputs:
+  AgentId:
+    Description: Bedrock Agent ID
+    Value: !GetAtt BedrockAgentCustomResource.AgentId
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentId'
+
+  AgentAliasId:
+    Description: Bedrock Agent Alias ID
+    Value: !GetAtt BedrockAgentCustomResource.AgentAliasId
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentAliasId'
+
+  LambdaFunctionArn:
+    Description: Lambda Executor Function ARN
+    Value: !GetAtt LambdaExecutorFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaArn'
+
+  S3BucketName:
+    Description: S3 Bucket for Agent Artifacts
+    Value: !Ref AgentArtifactsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3Bucket'
+
+  AgentRoleArn:
+    Description: Bedrock Agent IAM Role ARN
+    Value: !GetAtt BedrockAgentRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentRoleArn'
+
+  Region:
+    Description: Deployment Region
+    Value: !Ref AWS::Region
+    Export:
+      Name: !Sub '${AWS::StackName}-Region'
